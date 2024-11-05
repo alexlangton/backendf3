@@ -1,0 +1,6 @@
+{
+    "require": {
+        "bcosca/fatfree-core": "^3.8",
+        "monolog/monolog": "^3.7"
+    }
+}

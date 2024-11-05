@@ -1,0 +1,10 @@
+RewriteEngine On
+RewriteBase /pk/
+
+# Permitir peticiones CORS (si es necesario)
+Header set Access-Control-Allow-Origin "*"
+
+# Si el archivo/directorio no existe, redirige a index.php
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)$ index.php [QSA,L] 
