@@ -12,188 +12,122 @@ class BaseController extends JsonController {
         }
     }
 
-    protected function validarToken() {
-        $headers = getallheaders();
-        $authHeader = $headers['Authorization'] ?? '';
-        
-        if (empty($authHeader) || !preg_match('/Bearer\s+(.*)$/i', $authHeader, $matches)) {
-            return $this->respuestaError('Token no proporcionado', 401);
-        }
-
-        $token = $matches[1];
-        // Aquí puedes agregar la validación del token con tu lógica específica
-        // Por ahora solo verificamos que exista
-        if (empty($token)) {
-            return $this->respuestaError('Token inválido', 401);
-        }
-
-        return true;
-    }
-
     public function obtener($f3, $params) {
-        if ($this->validarToken() !== true) {
-            return $this->validarToken();
-        }
+        return $this->ejecutarOperacion(function() use ($params) {
+            $validacionId = $this->validarId($params['id'] ?? null, $this->tabla);
+            if ($validacionId !== true) return $validacionId;
 
-        try {
-            $id = $this->validarId($params);
-            if ($id === false) return;
-
-            $this->logger->debug("Intento de obtener registro con ID: {$id}");
-            $registro = $this->consultas->obtenerPorId($id);
-            
+            $registro = $this->consultas->obtenerPorId($params['id']);
             if (!$registro) {
-                return $this->errorRegistroNoEncontrado($id, $this->tabla);
+                return $this->errorRegistroNoEncontrado($params['id'], $this->tabla);
             }
 
             return $this->respuestaExito($registro);
-
-        } catch (\Exception $e) {
-            return $this->manejarError($e, 'Error al obtener el registro');
-        }
+        }, 'Error al obtener el registro');
     }
 
     public function obtenerTodos($f3) {
-        if ($this->validarToken() !== true) {
-            return $this->validarToken();
-        }
-
-        try {
-            $this->logger->debug("Intento de obtener todos los registros");
-            $registros = $this->consultas->obtenerTodos();
-            return $this->respuestaExito($registros);
-        } catch (\Exception $e) {
-            return $this->manejarError($e, 'Error al obtener los registros');
-        }
+        return $this->ejecutarOperacion(function() {
+            return $this->respuestaExito(
+                $this->consultas->obtenerTodos()
+            );
+        }, 'Error al obtener los registros');
     }
 
     private function procesarGuardado($datos, $id = null) {
-        // Validar datos
         $validador = new Validador($this->f3);
         $resultado = $validador->validar($this->tabla, $datos, $id !== null);
 
         if (!$resultado['valido']) {
-            $this->logger->error("Datos inválidos en " . ($id ? "actualización" : "creación") . ": " . json_encode($resultado['errores']));
-            return [
-                'estado' => 'error',
-                'mensaje' => 'Datos inválidos',
-                'errores' => $resultado['errores'],
-                'codigo' => 400
-            ];
+            return $this->respuestaError(
+                'Datos inválidos',
+                422,
+                $resultado['errores']
+            );
         }
 
-        // Insertar o actualizar según corresponda
-        if ($id) {
-            $registro = $this->consultas->actualizar($id, $resultado['datos_limpios']);
-            $operacion = "actualizar";
-        } else {
-            $registro = $this->consultas->insertar($resultado['datos_limpios']);
-            $operacion = "crear";
-        }
-        
-        if (!$registro) {
-            $this->logger->error("Error al $operacion registro. Datos: " . json_encode($resultado['datos_limpios']));
-            return [
-                'estado' => 'error',
-                'mensaje' => "Error al $operacion el registro",
-                'codigo' => 500
-            ];
-        }
+        try {
+            $operacion = $id ? 'actualizar' : 'crear';
+            $registro = $id ? 
+                $this->consultas->actualizar($id, $resultado['datos_limpios']) :
+                $this->consultas->insertar($resultado['datos_limpios']);
 
-        $this->logger->debug("Registro " . ($id ? "actualizado" : "creado") . " correctamente. ID: " . ($id ?: $registro['id']));
-        return [
-            'estado' => 'exito',
-            'mensaje' => "Registro " . ($id ? "actualizado" : "creado") . " correctamente",
-            'datos' => $registro,
-            'codigo' => $id ? 200 : 201
-        ];
+            if (!$registro) {
+                throw new \Exception("Error al $operacion el registro");
+            }
+
+            return $this->respuestaExito(
+                $registro,
+                "Registro {$operacion}do correctamente",
+                $id ? 200 : 201
+            );
+        } catch (\Exception $e) {
+            return $this->respuestaError($e->getMessage(), 500);
+        }
     }
 
     public function guardarnuevo($f3) {
-        try {
-            $rawBody = $f3->get('BODY');
-            $this->logger->debug("Intento de crear nuevo registro. Body recibido: " . $rawBody);
-            
-            $resultadoJSON = $this->decodificarJSON($rawBody);
+        return $this->ejecutarOperacion(function() use ($f3) {
+            $resultadoJSON = $this->decodificarJSON($f3->get('BODY'));
             if ($resultadoJSON['error']) {
-                return $this->jsonResponse($resultadoJSON['response'], 400);
+                return $resultadoJSON['response'];
             }
 
-            $resultado = $this->procesarGuardado($resultadoJSON['datos']);
-            return $this->jsonResponse($resultado, $resultado['codigo']);
-
-        } catch (\Exception $e) {
-            return $this->manejarError($e, 'Error al crear el registro');
-        }
+            return $this->procesarGuardado($resultadoJSON['datos']);
+        }, 'Error al crear el registro');
     }
 
     public function guardar($f3, $params) {
-        try {
-            $id = $this->validarId($params, ' en actualización');
-            if ($id === false) return;
+        return $this->ejecutarOperacion(function() use ($f3, $params) {
+            $validacionId = $this->validarId($params['id'] ?? null, $this->tabla);
+            if ($validacionId !== true) return $validacionId;
 
-            $resultadoJSON = $this->decodificarJSON($f3->get('BODY'), ' en actualización');
+            $resultadoJSON = $this->decodificarJSON($f3->get('BODY'));
             if ($resultadoJSON['error']) {
-                return $this->jsonResponse($resultadoJSON['response'], 400);
+                return $resultadoJSON['response'];
             }
 
-            $registro = $this->consultas->obtenerPorId($id);
+            $registro = $this->consultas->obtenerPorId($params['id']);
             if (!$registro) {
-                return $this->errorRegistroNoEncontrado($id, $this->tabla);
+                return $this->errorRegistroNoEncontrado($params['id'], $this->tabla);
             }
 
-            $resultado = $this->procesarGuardado($resultadoJSON['datos'], $id);
-            return $this->jsonResponse($resultado, $resultado['codigo']);
-
-        } catch (\Exception $e) {
-            return $this->manejarError($e, 'Error al actualizar el registro');
-        }
+            return $this->procesarGuardado($resultadoJSON['datos'], $params['id']);
+        }, 'Error al actualizar el registro');
     }
 
     public function borrar($f3, $params) {
-        try {
-            $id = $this->validarId($params);
-            if ($id === false) return;
+        return $this->ejecutarOperacion(function() use ($params) {
+            $validacionId = $this->validarId($params['id'] ?? null, $this->tabla);
+            if ($validacionId !== true) return $validacionId;
 
-            $this->logger->debug("Intento de eliminar registro con ID: {$id}");
-            $success = $this->consultas->eliminar($id);
-            
-            if (!$success) {
+            if (!$this->consultas->eliminar($params['id'])) {
                 return $this->respuestaError('Error al eliminar el registro', 500);
             }
 
-            $this->logger->debug("Registro eliminado correctamente. ID: {$id}");
             return $this->respuestaExito(null, 'Registro eliminado correctamente');
-
-        } catch (\Exception $e) {
-            return $this->manejarError($e, 'Error al eliminar el registro');
-        }
+        }, 'Error al eliminar el registro');
     }
 
     public function obtenerConFiltros($f3) {
-        try {
+        return $this->ejecutarOperacion(function() use ($f3) {
             $filtros = array_filter($f3->get('GET'), function($valor) {
                 return !empty($valor);
             });
             
-            $this->logger->debug("Intento de obtener registros con filtros: " . json_encode($filtros));
-            $registros = $this->consultas->buscarConFiltros(
-                $filtros,
-                $f3->get('GET.orden'),
-                $f3->get('GET.limite')
+            return $this->respuestaExito(
+                $this->consultas->buscarConFiltros(
+                    $filtros,
+                    $f3->get('GET.orden'),
+                    $f3->get('GET.limite')
+                )
             );
-            
-            return $this->respuestaExito($registros);
-        } catch (\Exception $e) {
-            return $this->manejarError($e, 'Error al obtener los registros');
-        }
+        }, 'Error al obtener los registros');
     }
 
     public function buscarPorTexto($f3) {
-        try {
+        return $this->ejecutarOperacion(function() use ($f3) {
             $texto = $f3->get('GET.texto');
-            $this->logger->debug("Intento de búsqueda por texto: {$texto}");
-            
             if (!$texto) {
                 return $this->respuestaError('Texto de búsqueda no proporcionado');
             }
@@ -202,20 +136,17 @@ class BaseController extends JsonController {
                       explode(',', $f3->get('GET.campos')) : 
                       ['nombre'];
             
-            $registros = $this->consultas->buscarTexto($campos, $texto);
-            return $this->respuestaExito($registros);
-
-        } catch (\Exception $e) {
-            return $this->manejarError($e, 'Error en la búsqueda');
-        }
+            return $this->respuestaExito(
+                $this->consultas->buscarTexto($campos, $texto)
+            );
+        }, 'Error en la búsqueda');
     }
 
     public function obtenerPaginado($f3, $params) {
-        try {
-            $pagina = isset($params['pagina']) ? (int)$params['pagina'] : 1;
-            $porPagina = isset($params['por_pagina']) ? (int)$params['por_pagina'] : 10;
+        return $this->ejecutarOperacion(function() use ($params) {
+            $pagina = (int)($params['pagina'] ?? 1);
+            $porPagina = (int)($params['por_pagina'] ?? 10);
             
-            $this->logger->debug("Intento de obtener registros paginados. Página: $pagina, Por página: $porPagina");
             $resultado = $this->consultas->obtenerPaginado($pagina, $porPagina);
             
             return $this->respuestaExito($resultado['datos'], null, 200, [
@@ -226,25 +157,6 @@ class BaseController extends JsonController {
                     'total_paginas' => ceil($resultado['total'] / $resultado['por_pagina'])
                 ]
             ]);
-
-        } catch (\Exception $e) {
-            return $this->manejarError($e, 'Error al obtener los registros');
-        }
-    }
-
-    private function validarId($params, $contexto = '') {
-        if (!isset($params['id'])) {
-            $this->logger->error("ID no proporcionado" . $contexto);
-            return $this->errorIdNoProporcionado();
-        }
-        return $params['id'];
-    }
-
-    protected function ejecutarOperacion(callable $operacion, $mensajeError) {
-        try {
-            return $operacion();
-        } catch (\Exception $e) {
-            return $this->manejarError($e, $mensajeError);
-        }
+        }, 'Error al obtener los registros');
     }
 } 

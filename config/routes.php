@@ -1,9 +1,9 @@
 <?php
 
 // Rutas de autenticación
-$f3->route('POST /api/public/login', 'AuthController->login');
-$f3->route('POST /api/public/logout', 'AuthController->logout');
-$f3->route('POST /api/public/recuperarPassword', 'AuthController->recuperarPassword');
+$f3->route('POST /api/public/login', 'AutenticacionController->login');
+$f3->route('POST /api/public/logout', 'AutenticacionController->logout');
+$f3->route('POST /api/public/recuperarPassword', 'AutenticacionController->recuperarPassword');
 
 // Recursos
 $recursos = [

@@ -1,75 +1,50 @@
 <?php
 
 class JsonController extends Controller {
-    protected $consultasAuth;
-    protected $tokenManager;
+    protected $autenticacionController;
 
     public function __construct() {
         parent::__construct();
-        $this->consultasAuth = new ConsultasAuth();
-        $this->tokenManager = new TokenManager();
+        $this->autenticacionController = new AutenticacionController();
     }
 
-    protected function esRutaPublica($ruta, $metodo) {
-        // Si la ruta comienza con /api/public/
-        return strpos($ruta, '/api/public/') === 0;
-    }
-
+    // Middleware de autenticación
     public function beforeRoute($f3) {
-        $rutaActual = $f3->get('PATTERN');
-        $metodo = $f3->get('VERB');
-
-        if ($this->esRutaPublica($rutaActual, $metodo)) {
-            return;
+        $resultado = $this->autenticacionController->verificarAutenticacion($f3);
+        if ($resultado !== true) {
+            return $this->respuestaError(
+                $resultado['mensaje'],
+                $resultado['codigo'],
+                $resultado['detalles'] ?? null
+            );
         }
-
-        $token = $this->tokenManager->obtenerToken();
-        if (!$token) {
-            $this->respuestaError('Token no proporcionado', 401);
-            exit;
-        }
-
-        $resultadoToken = $this->tokenManager->verificarToken($token);
-        if (!$resultadoToken['valido']) {
-            $this->respuestaError($resultadoToken['mensaje'], 401);
-            exit;
-        }
-
-        $f3->set('USUARIO', $resultadoToken['usuario']);
     }
 
+    // Métodos de respuesta JSON
     protected function jsonResponse($data, $code = 200) {
-        // Asegurar formato consistente para todas las respuestas
-        $response = [];
-        
-        if (is_array($data) && isset($data['estado'])) {
-            // Ya tiene el formato correcto
-            $response = $data;
-        } else if (is_array($data) && isset($data[0]) && $data[0] === 'exito') {
-            // Convertir formato antiguo a nuevo
-            $response = [
-                'estado' => 'exito',
-                'datos' => $data[1]
-            ];
-        } else {
-            // Cualquier otra respuesta
-            $response = [
-                'estado' => 'exito',
-                'datos' => $data
-            ];
-        }
-
         header('Content-Type: application/json');
         http_response_code($code);
-        echo json_encode($response);
+        echo json_encode($this->formatearRespuesta($data));
         exit;
     }
 
-    protected function respuestaExito($datos = null, $mensaje = null, $codigo = 200, $adicional = []) {
+    private function formatearRespuesta($data) {
+        if (is_array($data) && isset($data['estado'])) {
+            return $data;
+        }
+        return [
+            'estado' => 'exito',
+            'datos' => $data
+        ];
+    }
+
+    protected function respuestaExito($datos = null, $mensaje = null, $codigo = 200, $metadata = null) {
         $respuesta = ['estado' => 'exito'];
+        
         if ($mensaje) $respuesta['mensaje'] = $mensaje;
         if ($datos !== null) $respuesta['datos'] = $datos;
-        if ($adicional) $respuesta = array_merge($respuesta, $adicional);
+        if ($metadata) $respuesta['metadata'] = $metadata;
+        
         return $this->jsonResponse($respuesta, $codigo);
     }
 
@@ -78,48 +53,79 @@ class JsonController extends Controller {
             'estado' => 'error',
             'mensaje' => $mensaje
         ];
-        if ($detalles !== null) $respuesta['detalles'] = $detalles;
+        
+        if ($detalles !== null) {
+            $respuesta['detalles'] = $detalles;
+        }
+        
         return $this->jsonResponse($respuesta, $codigo);
     }
 
-    protected function manejarError(\Exception $e, $mensaje) {
+    // Manejo de errores y validaciones
+    protected function manejarError(\Exception $e, $mensaje = null) {
         $this->logger->error($e->getMessage());
-        return $this->jsonResponse([
-            'estado' => 'error',
-            'mensaje' => $mensaje,
-            'error_detalle' => $e->getMessage()
-        ], 500);
+        return $this->respuestaError(
+            $mensaje ?? 'Error interno del servidor',
+            500,
+            $this->f3->get('DEBUG') ? ['error' => $e->getMessage()] : null
+        );
     }
 
-    protected function errorIdNoProporcionado() {
-        return $this->respuestaError('ID no proporcionado', 400);
+    protected function ejecutarOperacion(callable $operacion, $mensajeError) {
+        try {
+            return $operacion();
+        } catch (\Exception $e) {
+            return $this->manejarError($e, $mensajeError);
+        }
+    }
+
+    // Utilidades de validación
+    protected function validarId($id, $tabla) {
+        if (empty($id)) {
+            return $this->respuestaError('ID no proporcionado', 400);
+        }
+
+        if (!is_numeric($id) || $id <= 0) {
+            return $this->respuestaError('ID inválido', 400);
+        }
+
+        return true;
     }
 
     protected function errorRegistroNoEncontrado($id, $tabla) {
         return $this->respuestaError(
-            "Registro no encontrado con ID: {$id}",
+            "Registro no encontrado",
             404,
             [
-                'debug' => [
-                    'tabla' => $tabla,
-                    'id_buscado' => $id
-                ]
+                'tabla' => $tabla,
+                'id' => $id
             ]
         );
     }
 
+    // Procesamiento de JSON
     protected function decodificarJSON($rawBody, $contexto = '') {
+        if (empty($rawBody)) {
+            return [
+                'error' => true,
+                'response' => [
+                    'estado' => 'error',
+                    'mensaje' => 'No se proporcionaron datos'
+                ]
+            ];
+        }
+
         $datos = json_decode($rawBody, true);
         
-        if (!$datos) {
+        if (json_last_error() !== JSON_ERROR_NONE) {
             $error = json_last_error_msg();
             $this->logger->error("Error decodificando JSON{$contexto}: $error");
             return [
                 'error' => true,
                 'response' => [
                     'estado' => 'error',
-                    'mensaje' => 'Datos no proporcionados o formato JSON inválido',
-                    'debug' => $error
+                    'mensaje' => 'Formato JSON inválido',
+                    'detalles' => $this->f3->get('DEBUG') ? ['error' => $error] : null
                 ]
             ];
         }
