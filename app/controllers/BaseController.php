@@ -1,6 +1,6 @@
 <?php
 
-class BaseController extends JsonController {
+class BaseController extends AutenticacionController {
     protected $tabla;
     protected $consultas;
 

@@ -1,29 +1,21 @@
 <?php
 
 class JsonController extends Controller {
-    protected $autenticacionController;
-
-    public function __construct() {
-        parent::__construct();
-        $this->autenticacionController = new AutenticacionController();
-    }
-
-    // Middleware de autenticación
+    // El beforeRoute será implementado por AutenticacionController
     public function beforeRoute($f3) {
-        $resultado = $this->autenticacionController->verificarAutenticacion($f3);
-        if ($resultado !== true) {
-            return $this->respuestaError(
-                $resultado['mensaje'],
-                $resultado['codigo'],
-                $resultado['detalles'] ?? null
-            );
-        }
+        // Método vacío que será sobreescrito
     }
 
     // Métodos de respuesta JSON
     protected function jsonResponse($data, $code = 200) {
         header('Content-Type: application/json');
         http_response_code($code);
+        
+        // Añadir headers de seguridad
+        header('X-Content-Type-Options: nosniff');
+        header('X-Frame-Options: DENY');
+        header('X-XSS-Protection: 1; mode=block');
+        
         echo json_encode($this->formatearRespuesta($data));
         exit;
     }
@@ -34,7 +26,8 @@ class JsonController extends Controller {
         }
         return [
             'estado' => 'exito',
-            'datos' => $data
+            'datos' => $data,
+            'timestamp' => date('Y-m-d H:i:s')  // Añadir timestamp
         ];
     }
 
@@ -110,7 +103,8 @@ class JsonController extends Controller {
                 'error' => true,
                 'response' => [
                     'estado' => 'error',
-                    'mensaje' => 'No se proporcionaron datos'
+                    'mensaje' => 'No se proporcionaron datos',
+                    'timestamp' => date('Y-m-d H:i:s')
                 ]
             ];
         }
@@ -125,7 +119,8 @@ class JsonController extends Controller {
                 'response' => [
                     'estado' => 'error',
                     'mensaje' => 'Formato JSON inválido',
-                    'detalles' => $this->f3->get('DEBUG') ? ['error' => $error] : null
+                    'detalles' => $this->f3->get('DEBUG') ? ['error' => $error] : null,
+                    'timestamp' => date('Y-m-d H:i:s')
                 ]
             ];
         }
