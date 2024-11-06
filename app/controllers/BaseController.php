@@ -147,14 +147,25 @@ class BaseController extends AutenticacionController {
             $pagina = (int)($params['pagina'] ?? 1);
             $porPagina = (int)($params['por_pagina'] ?? 10);
             
-            $resultado = $this->consultas->obtenerPaginado($pagina, $porPagina);
+            $resultadoConsulta = $this->consultas->obtenerPaginado($pagina, $porPagina);
             
-            return $this->respuestaExito($resultado['datos'], null, 200, [
+            // Verificar si hay error en la consulta
+            if ($resultadoConsulta['estado'] === 'error') {
+                return $this->respuestaError(
+                    $resultadoConsulta['mensaje'],
+                    $resultadoConsulta['detalles'] ?? null
+                );
+            }
+
+            // Extraer los datos de paginación
+            $datos = $resultadoConsulta['datos'];
+            
+            return $this->respuestaExito($datos['datos'], null, 200, [
                 'paginacion' => [
-                    'total' => $resultado['total'],
-                    'pagina_actual' => $resultado['pagina_actual'],
-                    'por_pagina' => $resultado['por_pagina'],
-                    'total_paginas' => ceil($resultado['total'] / $resultado['por_pagina'])
+                    'total' => $datos['total'],
+                    'pagina_actual' => $datos['pagina_actual'],
+                    'por_pagina' => $datos['por_pagina'],
+                    'total_paginas' => $datos['total_paginas']
                 ]
             ]);
         }, 'Error al obtener los registros');

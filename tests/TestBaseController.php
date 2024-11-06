@@ -20,12 +20,21 @@ class TestBaseController {
         curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
         
         if ($data) {
-            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
+            $jsonData = json_encode($data);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $jsonData);
+            echo "\nEnviando datos: $jsonData\n";
         }
         
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        
+        if (curl_errno($ch)) {
+            echo "\nError CURL: " . curl_error($ch) . "\n";
+        }
+        
         curl_close($ch);
+        
+        echo "\nRespuesta: $response\n";
         
         return [
             'code' => $httpCode,
@@ -35,41 +44,64 @@ class TestBaseController {
 
     public function testearTodo() {
         foreach ($this->recursos as $recurso) {
-            echo "\nTesteando recurso: $recurso\n";
-            echo "------------------------\n";
+            echo "\n=== Testeando recurso: $recurso ===\n";
+            echo str_repeat("=", 40) . "\n";
 
-            // Test obtenerConFiltros
+            // Test obtenerTodos
             $result = $this->request('GET', $recurso);
-            echo "GET /$recurso: {$result['code']}\n";
+            echo "\nGET /$recurso: {$result['code']}\n";
+            $this->validarRespuesta($result);
 
             // Test obtenerPaginado
             $result = $this->request('GET', "$recurso/pagina/1/10");
-            echo "GET /$recurso/pagina/1/10: {$result['code']}\n";
+            echo "\nGET /$recurso/pagina/1/10: {$result['code']}\n";
+            $this->validarRespuesta($result);
 
             // Test buscarPorTexto
             $result = $this->request('GET', "$recurso/buscar?texto=test");
-            echo "GET /$recurso/buscar?texto=test: {$result['code']}\n";
+            echo "\nGET /$recurso/buscar?texto=test: {$result['code']}\n";
+            $this->validarRespuesta($result);
 
             // Test guardarnuevo
             $datos = $this->getDatosPrueba($recurso);
             $result = $this->request('POST', $recurso, $datos);
-            echo "POST /$recurso: {$result['code']}\n";
+            echo "\nPOST /$recurso: {$result['code']}\n";
+            $this->validarRespuesta($result);
             
-            if ($result['code'] == 201) {
+            if ($result['code'] == 201 && isset($result['response']['datos']['id'])) {
                 $id = $result['response']['datos']['id'];
                 
                 // Test obtener
                 $result = $this->request('GET', "$recurso/$id");
-                echo "GET /$recurso/$id: {$result['code']}\n";
+                echo "\nGET /$recurso/$id: {$result['code']}\n";
+                $this->validarRespuesta($result);
 
                 // Test guardar (actualizar)
-                $datos['nombre'] = 'Actualizado';
+                $datos['nombre'] = "Actualizado " . date('Y-m-d H:i:s');
                 $result = $this->request('PUT', "$recurso/$id", $datos);
-                echo "PUT /$recurso/$id: {$result['code']}\n";
+                echo "\nPUT /$recurso/$id: {$result['code']}\n";
+                $this->validarRespuesta($result);
 
                 // Test borrar
                 $result = $this->request('DELETE', "$recurso/$id");
-                echo "DELETE /$recurso/$id: {$result['code']}\n";
+                echo "\nDELETE /$recurso/$id: {$result['code']}\n";
+                $this->validarRespuesta($result);
+            } else {
+                echo "\nError al crear recurso. No se ejecutarán las pruebas restantes.\n";
+            }
+        }
+    }
+
+    private function validarRespuesta($result) {
+        if (!isset($result['response'])) {
+            echo "ERROR: No hay respuesta del servidor\n";
+            return;
+        }
+        
+        if (isset($result['response']['estado']) && $result['response']['estado'] === 'error') {
+            echo "ERROR: " . ($result['response']['mensaje'] ?? 'Error desconocido') . "\n";
+            if (isset($result['response']['detalles'])) {
+                echo "Detalles: " . print_r($result['response']['detalles'], true) . "\n";
             }
         }
     }
@@ -103,10 +135,13 @@ class TestBaseController {
                     'descripcion' => 'Descripción Test',
                     'estado' => 'activo'
                 ];
+            
+            default:
+                throw new \Exception("Recurso no soportado: $recurso");
         }
     }
 }
 
 // Ejecutar los tests
 $tester = new TestBaseController();
-$tester->testearTodo(); 
+$tester->testearTodo();
