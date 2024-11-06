@@ -103,13 +103,25 @@ class ConsultasSQL {
     }
 
     public function obtenerTodos() {
-        $sql = 'SELECT * FROM ' . $this->tabla;
-        $this->logQuery($sql);
-        return $this->db->exec($sql);
+        try {
+            $sql = 'SELECT * FROM ' . $this->tabla;
+            $this->logQuery($sql);
+            $resultado = $this->db->exec($sql);
+            
+            return $this->respuestaExito($resultado);
+        } catch (\Exception $e) {
+            $error = $this->manejarError($e);
+            return $this->respuestaError(
+                $error['mensaje'],
+                $error,
+                $error['codigo'] ?? 500
+            );
+        }
     }
 
     protected function manejarError($e) {
         $mensaje = $e->getMessage();
+        $codigo = $e->getCode();
         $errorInfo = [];
 
         // Capturar errores de duplicados
@@ -123,15 +135,41 @@ class ConsultasSQL {
                     'tipo' => 'duplicado',
                     'campo' => $campo,
                     'valor' => $valor,
-                    'mensaje' => "Valor duplicado: {$campo} = {$valor}"
+                    'mensaje' => "Valor duplicado: {$campo} = {$valor}",
+                    'codigo' => 409 // Conflict
                 ];
             }
+        }
+        // Error de restricción de llave foránea
+        elseif (strpos($mensaje, 'foreign key constraint fails') !== false) {
+            $errorInfo = [
+                'tipo' => 'restriccion_foranea',
+                'mensaje' => 'Violación de restricción de llave foránea',
+                'codigo' => 409
+            ];
+        }
+        // Error de tabla no encontrada
+        elseif (strpos($mensaje, "Table") !== false && strpos($mensaje, "doesn't exist") !== false) {
+            $errorInfo = [
+                'tipo' => 'tabla_no_existe',
+                'mensaje' => 'La tabla no existe',
+                'codigo' => 500
+            ];
+        }
+        // Error de columna no encontrada
+        elseif (strpos($mensaje, "Unknown column") !== false) {
+            $errorInfo = [
+                'tipo' => 'columna_no_existe',
+                'mensaje' => 'Columna no existe en la tabla',
+                'codigo' => 400
+            ];
         }
         // Otros errores SQL
         else {
             $errorInfo = [
                 'tipo' => 'sql',
-                'mensaje' => $mensaje
+                'mensaje' => $mensaje,
+                'codigo' => $codigo ?: 500
             ];
         }
 
@@ -145,14 +183,28 @@ class ConsultasSQL {
         return $errorInfo;
     }
 
+    protected function respuestaExito($datos = null, $mensaje = null) {
+        return [
+            'estado' => 'exito',
+            'mensaje' => $mensaje,
+            'datos' => $datos
+        ];
+    }
+
+    protected function respuestaError($mensaje, $detalles = null, $codigo = 500) {
+        return [
+            'estado' => 'error',
+            'mensaje' => $mensaje,
+            'detalles' => $detalles,
+            'codigo' => $codigo
+        ];
+    }
+
     public function insertar($datos) {
         try {
             // Validar que haya datos
             if (empty($datos)) {
-                return [
-                    'estado' => 'error',
-                    'mensaje' => 'No hay datos para insertar'
-                ];
+                return $this->respuestaError('No hay datos para insertar', null, 400);
             }
 
             // Hashear password si existe y estamos en la tabla usuarios
@@ -173,38 +225,33 @@ class ConsultasSQL {
             $result = $this->db->exec($sql, array_values($datos));
             
             if ($result === false) {
-                return [
-                    'estado' => 'error',
-                    'mensaje' => 'Error en la ejecución de la consulta'
-                ];
+                return $this->respuestaError('Error en la ejecución de la consulta');
             }
             
             // Obtener el ID del nuevo registro
             $nuevoId = $this->db->lastInsertId();
             
-            return [
-                'estado' => 'exito',
-                'mensaje' => 'Registro creado correctamente',
-                'id' => $nuevoId
-            ];
+            return $this->respuestaExito(
+                ['id' => $nuevoId],
+                'Registro creado correctamente'
+            );
                 
         } catch (\Exception $e) {
             $error = $this->manejarError($e);
-            $this->f3->write(
-                $this->logFile,
-                date('Y-m-d H:i:s') . " - Error en inserción: " . $e->getMessage() . "\n",
-                true
+            return $this->respuestaError(
+                $error['mensaje'],
+                $error,
+                $error['codigo'] ?? 500
             );
-            return [
-                'estado' => 'error',
-                'mensaje' => $error['mensaje'],
-                'detalles' => $error
-            ];
         }
     }
 
     public function actualizar($id, $datos) {
         try {
+            if (empty($id)) {
+                return $this->respuestaError('ID no proporcionado', null, 400);
+            }
+
             // Hashear password si existe y estamos en la tabla usuarios
             if ($this->tabla === 'usuarios' && isset($datos['password'])) {
                 $hasheo = new HasheoPassword();
@@ -225,97 +272,213 @@ class ConsultasSQL {
                 // Si la actualización fue exitosa, devolver el registro actualizado
                 return $this->obtenerPorId($id);
             }
-            return null;
+            
+            return $this->respuestaError('Error al actualizar el registro');
+            
         } catch (\Exception $e) {
-            // Registrar el error
-            $this->f3->write(
-                $this->logFile,
-                date('Y-m-d H:i:s') . ' - Error en actualización: ' . $e->getMessage() . "\n",
-                true
+            $error = $this->manejarError($e);
+            return $this->respuestaError(
+                $error['mensaje'],
+                $error,
+                $error['codigo'] ?? 500
             );
-            return null;
         }
     }
 
     public function eliminar($id) {
-        return $this->db->exec('DELETE FROM ' . $this->tabla . ' WHERE id = ?', [$id]);
+        try {
+            if (empty($id)) {
+                return $this->respuestaError('ID no proporcionado', null, 400);
+            }
+
+            $sql = 'DELETE FROM ' . $this->tabla . ' WHERE id = ?';
+            $this->logQuery($sql, [$id]);
+            $result = $this->db->exec($sql, [$id]);
+            
+            if ($result === false) {
+                return $this->respuestaError('Error al eliminar el registro');
+            }
+            
+            return $this->respuestaExito(
+                ['id' => $id],
+                'Registro eliminado correctamente'
+            );
+        } catch (\Exception $e) {
+            $error = $this->manejarError($e);
+            return $this->respuestaError(
+                $error['mensaje'],
+                $error,
+                $error['codigo'] ?? 500
+            );
+        }
     }
 
     // Métodos adicionales para consultas más específicas
     public function buscarPor($campo, $valor) {
-        return $this->db->exec('SELECT * FROM ' . $this->tabla . ' WHERE ' . $campo . ' = ?', [$valor]);
+        try {
+            $sql = 'SELECT * FROM ' . $this->tabla . ' WHERE ' . $campo . ' = ?';
+            $this->logQuery($sql, [$valor]);
+            $resultado = $this->db->exec($sql, [$valor]);
+            
+            return $this->respuestaExito($resultado);
+        } catch (\Exception $e) {
+            $error = $this->manejarError($e);
+            return $this->respuestaError(
+                $error['mensaje'],
+                $error,
+                $error['codigo'] ?? 500
+            );
+        }
     }
 
     public function contarRegistros() {
-        return $this->db->exec('SELECT COUNT(*) as total FROM ' . $this->tabla)[0]['total'];
+        try {
+            $sql = 'SELECT COUNT(*) as total FROM ' . $this->tabla;
+            $this->logQuery($sql);
+            $resultado = $this->db->exec($sql);
+            
+            return $this->respuestaExito([
+                'total' => $resultado[0]['total']
+            ]);
+        } catch (\Exception $e) {
+            $error = $this->manejarError($e);
+            return $this->respuestaError(
+                $error['mensaje'],
+                $error,
+                $error['codigo'] ?? 500
+            );
+        }
     }
 
     // Búsqueda con múltiples condiciones
     public function buscarConFiltros($filtros = [], $orden = null, $limite = null) {
-        $sql = 'SELECT * FROM ' . $this->tabla;
-        $valores = [];
-        
-        if (!empty($filtros)) {
-            $condiciones = [];
-            foreach ($filtros as $campo => $valor) {
-                $condiciones[] = "$campo = ?";
-                $valores[] = $valor;
+        try {
+            $sql = 'SELECT * FROM ' . $this->tabla;
+            $valores = [];
+            
+            if (!empty($filtros)) {
+                $condiciones = [];
+                foreach ($filtros as $campo => $valor) {
+                    $condiciones[] = "$campo = ?";
+                    $valores[] = $valor;
+                }
+                $sql .= ' WHERE ' . implode(' AND ', $condiciones);
             }
-            $sql .= ' WHERE ' . implode(' AND ', $condiciones);
+            
+            if ($orden) {
+                $sql .= ' ORDER BY ' . $orden;
+            }
+            
+            if ($limite) {
+                $sql .= ' LIMIT ' . $limite;
+            }
+            
+            $this->logQuery($sql, $valores);
+            $resultado = $this->db->exec($sql, $valores);
+            
+            return $this->respuestaExito($resultado);
+        } catch (\Exception $e) {
+            $error = $this->manejarError($e);
+            return $this->respuestaError(
+                $error['mensaje'],
+                $error,
+                $error['codigo'] ?? 500
+            );
         }
-        
-        if ($orden) {
-            $sql .= ' ORDER BY ' . $orden;
-        }
-        
-        if ($limite) {
-            $sql .= ' LIMIT ' . $limite;
-        }
-        
-        $this->logQuery($sql, $valores);
-        return $this->db->exec($sql, $valores);
     }
 
     // Búsqueda por texto en múltiples campos
     public function buscarTexto($campos, $texto) {
-        $condiciones = array_map(function($campo) {
-            return "$campo LIKE ?";
-        }, $campos);
-        
-        $sql = 'SELECT * FROM ' . $this->tabla . ' WHERE ' . implode(' OR ', $condiciones);
-        $valores = array_fill(0, count($campos), "%$texto%");
-        
-        return $this->db->exec($sql, $valores);
+        try {
+            $condiciones = array_map(function($campo) {
+                return "$campo LIKE ?";
+            }, $campos);
+            
+            $sql = 'SELECT * FROM ' . $this->tabla . ' WHERE ' . implode(' OR ', $condiciones);
+            $valores = array_fill(0, count($campos), "%$texto%");
+            
+            $this->logQuery($sql, $valores);
+            $resultado = $this->db->exec($sql, $valores);
+            
+            return $this->respuestaExito($resultado);
+        } catch (\Exception $e) {
+            $error = $this->manejarError($e);
+            return $this->respuestaError(
+                $error['mensaje'],
+                $error,
+                $error['codigo'] ?? 500
+            );
+        }
     }
 
     // Obtener registros con paginación
     public function obtenerPaginado($pagina = 1, $porPagina = 10) {
-        $offset = ($pagina - 1) * $porPagina;
-        $sql = "SELECT * FROM {$this->tabla} LIMIT ? OFFSET ?";
-        
-        return [
-            'datos' => $this->db->exec($sql, [$porPagina, $offset]),
-            'total' => $this->contarRegistros(),
-            'pagina_actual' => $pagina,
-            'por_pagina' => $porPagina
-        ];
+        try {
+            $offset = ($pagina - 1) * $porPagina;
+            $sql = "SELECT * FROM {$this->tabla} LIMIT ? OFFSET ?";
+            $this->logQuery($sql, [$porPagina, $offset]);
+            
+            $total = $this->contarRegistros();
+            if ($total['estado'] === 'error') {
+                return $total;
+            }
+            
+            $resultado = $this->db->exec($sql, [$porPagina, $offset]);
+            
+            return $this->respuestaExito([
+                'datos' => $resultado,
+                'total' => $total['datos']['total'],
+                'pagina_actual' => $pagina,
+                'por_pagina' => $porPagina,
+                'total_paginas' => ceil($total['datos']['total'] / $porPagina)
+            ]);
+        } catch (\Exception $e) {
+            $error = $this->manejarError($e);
+            return $this->respuestaError(
+                $error['mensaje'],
+                $error,
+                $error['codigo'] ?? 500
+            );
+        }
     }
 
     // Actualización condicional
     public function actualizarDonde($condiciones, $datos) {
-        $campos = array_map(function($campo) {
-            return "$campo = ?";
-        }, array_keys($datos));
-        
-        $where = array_map(function($campo) {
-            return "$campo = ?";
-        }, array_keys($condiciones));
-        
-        $sql = "UPDATE {$this->tabla} SET " . implode(', ', $campos) . 
-               " WHERE " . implode(' AND ', $where);
-               
-        $valores = array_merge(array_values($datos), array_values($condiciones));
-        
-        return $this->db->exec($sql, $valores);
+        try {
+            if (empty($condiciones) || empty($datos)) {
+                return $this->respuestaError('Condiciones o datos no proporcionados', null, 400);
+            }
+
+            $campos = array_map(function($campo) {
+                return "$campo = ?";
+            }, array_keys($datos));
+            
+            $where = array_map(function($campo) {
+                return "$campo = ?";
+            }, array_keys($condiciones));
+            
+            $sql = "UPDATE {$this->tabla} SET " . implode(', ', $campos) . 
+                   " WHERE " . implode(' AND ', $where);
+                   
+            $valores = array_merge(array_values($datos), array_values($condiciones));
+            
+            $this->logQuery($sql, $valores);
+            $resultado = $this->db->exec($sql, $valores);
+            
+            if ($resultado === false) {
+                return $this->respuestaError('Error al actualizar los registros');
+            }
+            
+            return $this->respuestaExito([
+                'registros_actualizados' => $resultado
+            ], 'Registros actualizados correctamente');
+        } catch (\Exception $e) {
+            $error = $this->manejarError($e);
+            return $this->respuestaError(
+                $error['mensaje'],
+                $error,
+                $error['codigo'] ?? 500
+            );
+        }
     }
 } 
